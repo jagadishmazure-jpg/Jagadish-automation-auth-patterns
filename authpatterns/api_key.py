@@ -13,8 +13,9 @@ from .errors import AuthError
 
 
 class ApiKey:
-    def __init__(self, key_id, secret, expires_at):
+    def __init__(self, key_id, secret, expires_at, owner=None):
         self.key_id = key_id
+        self.owner = owner
         self.secret = secret
         self.expires_at = expires_at
         self.revoked = False
@@ -29,7 +30,7 @@ class ApiKeyStore:
     def issue(self, owner, ttl_seconds=3600):
         key_id = "ak_" + secrets.token_hex(8)
         key = ApiKey(key_id, secrets.token_hex(32),
-                     self._clock.now() + timedelta(seconds=ttl_seconds))
+                     self._clock.now() + timedelta(seconds=ttl_seconds), owner)
         self._keys[key_id] = key
         self.audit.record("apikey.issued", owner, key_id)
         return key
@@ -40,6 +41,13 @@ class ApiKeyStore:
             self.audit.record("apikey.rejected", key_id, "unknown_key")
             raise AuthError(AuthError.UNKNOWN_PRINCIPAL,
                             "unknown key id %r" % (key_id,))
+        # Check the secret first: the key id travels in the clear, so status
+        # (revoked/expired) must not be revealed to someone without the secret.
+        if not isinstance(secret, str) or not hmac.compare_digest(
+                key.secret.encode("utf-8"), secret.encode("utf-8")):
+            self.audit.record("apikey.rejected", key_id, "bad_secret")
+            raise AuthError(AuthError.BAD_SIGNATURE,
+                            "secret mismatch for key %r" % (key_id,))
         if key.revoked:
             self.audit.record("apikey.rejected", key_id, "revoked")
             raise AuthError(AuthError.REVOKED_CREDENTIAL,
@@ -48,10 +56,6 @@ class ApiKeyStore:
             self.audit.record("apikey.rejected", key_id, "expired")
             raise AuthError(AuthError.EXPIRED_CREDENTIAL,
                             "key %r has expired" % (key_id,))
-        if not hmac.compare_digest(key.secret, secret):
-            self.audit.record("apikey.rejected", key_id, "bad_secret")
-            raise AuthError(AuthError.BAD_SIGNATURE,
-                            "secret mismatch for key %r" % (key_id,))
         self.audit.record("apikey.authenticated", key_id, "ok")
         return key_id
 
@@ -70,7 +74,12 @@ class ApiKeyStore:
         if old is None:
             raise AuthError(AuthError.UNKNOWN_PRINCIPAL,
                             "unknown key id %r" % (key_id,))
-        new = self.issue("rotation", ttl_seconds=ttl_seconds)
+        if old.revoked:
+            # Revocation is terminal: rotating would mint a working key from
+            # one that was deliberately killed.
+            raise AuthError(AuthError.REVOKED_CREDENTIAL,
+                            "key %r is revoked and cannot be rotated" % (key_id,))
+        new = self.issue(old.owner or "rotation", ttl_seconds=ttl_seconds)
         old.expires_at = min(
             old.expires_at,
             self._clock.now() + timedelta(seconds=overlap_seconds),

@@ -1,10 +1,14 @@
 """Demo: enterprise-system idioms -- SAP, Oracle wallet, Salesforce, ServiceNow."""
 import sys
+
 sys.path.insert(0, ".")
 
 from authpatterns.clock import FakeClock
 from authpatterns.enterprise import (
-    OracleWallet, SalesforceConnectedApp, SAPServiceUser, SAPSystem,
+    OracleWallet,
+    SalesforceConnectedApp,
+    SAPServiceUser,
+    SAPSystem,
     ServiceNowInstance,
 )
 from authpatterns.errors import AuthError
@@ -32,8 +36,8 @@ except AuthError as e:
     print("wrong org blocked:", e.code)
 
 # ServiceNow: instance-bound basic auth
-snow = ServiceNowInstance("https://acme.service-now.com", clock)
+snow = ServiceNowInstance("https://ridgeline-ops.service-now.com", clock)
 snow.add_user("svc_int", "snow-password")
 print("ServiceNow auth:",
       snow.basic_auth("svc_int", "snow-password",
-                      "https://acme.service-now.com")["user"])
+                      "https://ridgeline-ops.service-now.com")["user"])

@@ -51,7 +51,7 @@ class Vault:
             secret = self._store[name]
         except KeyError:
             raise AuthError(AuthError.UNKNOWN_PRINCIPAL,
-                            "no secret named %r" % (name,))
+                            "no secret named %r" % (name,)) from None
         self.audit.record("secret.retrieved", name, fingerprint(secret))
         return secret
 

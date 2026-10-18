@@ -1,15 +1,18 @@
 """Tests: enterprise-system auth idioms (SAP, Oracle, Salesforce, ServiceNow, shares)."""
+
 import pytest
 
 from authpatterns.clock import FakeClock
 from authpatterns.enterprise import (
-    FileShareAccess, OracleWallet, SalesforceConnectedApp, SAPServiceUser,
-    SAPSystem, ServiceNowInstance,
+    FileShareAccess,
+    OracleWallet,
+    SalesforceConnectedApp,
+    SAPServiceUser,
+    SAPSystem,
+    ServiceNowInstance,
 )
 from authpatterns.errors import AuthError
 from authpatterns.kerberos import KDC
-from datetime import timedelta
-
 
 # -- SAP ---------------------------------------------------------------
 
@@ -105,7 +108,7 @@ def test_salesforce_token_wrong_org_rejected():
 
 def make_snow():
     clock = FakeClock()
-    snow = ServiceNowInstance("https://acme.service-now.com", clock)
+    snow = ServiceNowInstance("https://ridgeline-ops.service-now.com", clock)
     snow.add_user("svc_int", "snowpass")
     return clock, snow
 
@@ -113,7 +116,7 @@ def make_snow():
 def test_servicenow_basic_ok():
     _, snow = make_snow()
     result = snow.basic_auth("svc_int", "snowpass",
-                             "https://acme.service-now.com")
+                             "https://ridgeline-ops.service-now.com")
     assert result["user"] == "svc_int"
 
 
@@ -128,12 +131,12 @@ def test_servicenow_wrong_instance_rejected():
 def test_servicenow_oauth_roundtrip():
     clock, snow = make_snow()
     token = snow.issue_oauth_token("svc_int", "snowpass",
-                                   "https://acme.service-now.com")
-    result = snow.token_auth(token, "https://acme.service-now.com")
+                                   "https://ridgeline-ops.service-now.com")
+    result = snow.token_auth(token, "https://ridgeline-ops.service-now.com")
     assert result["user"] == "svc_int"
     clock.advance(hours=1)
     with pytest.raises(AuthError) as exc:
-        snow.token_auth(token, "https://acme.service-now.com")
+        snow.token_auth(token, "https://ridgeline-ops.service-now.com")
     assert exc.value.code == AuthError.EXPIRED_CREDENTIAL
 
 

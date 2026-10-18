@@ -69,6 +69,12 @@ class SAPSystem:
             raise AuthError(AuthError.UNKNOWN_PRINCIPAL,
                             "unknown user %r for client %r"
                             % (username, client))
+        # Password first: lock and expiry status are only revealed to someone
+        # who already knows the password.
+        if not user.check_password(password):
+            self.audit.record("sap.logon_rejected", username, "bad_password")
+            raise AuthError(AuthError.BAD_SIGNATURE,
+                            "bad password for %r" % (username,))
         if user.locked:
             self.audit.record("sap.logon_rejected", username, "locked")
             raise AuthError(AuthError.REVOKED_CREDENTIAL,
@@ -79,10 +85,6 @@ class SAPSystem:
                               "password_expired")
             raise AuthError(AuthError.EXPIRED_CREDENTIAL,
                             "password for %r has expired" % (username,))
-        if not user.check_password(password):
-            self.audit.record("sap.logon_rejected", username, "bad_password")
-            raise AuthError(AuthError.BAD_SIGNATURE,
-                            "bad password for %r" % (username,))
         self.audit.record("sap.logon", username, "client=%s" % client)
         return {"user": username, "client": client,
                 "at": self._clock.now().isoformat()}
@@ -176,7 +178,7 @@ class SalesforceConnectedApp:
             body, sig = token.rsplit("|", 1)
             client_id, token_org, iat, exp = body.split("|")
         except ValueError:
-            raise AuthError(AuthError.BAD_SIGNATURE, "malformed token")
+            raise AuthError(AuthError.BAD_SIGNATURE, "malformed token") from None
         expected = hmac.new(self._key, body.encode("utf-8"),
                             hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, sig):
@@ -198,7 +200,7 @@ class SalesforceConnectedApp:
 # --------------------------------------------------------------------------
 
 class ServiceNowInstance:
-    """Auth bound to one instance URL: credentials for dev.acme cannot be
+    """Auth bound to one instance URL: credentials for dev.ridgeline-ops cannot be
     replayed against prod, because the instance is part of the check."""
 
     def __init__(self, instance_url, clock, audit=None):
@@ -267,7 +269,14 @@ class FileShareAccess:
         self._acls = share_acls
         self.audit = audit or AuditLog(clock)
 
+    OPERATIONS = ("read", "write")
+
     def access(self, service_ticket, share, operation="read"):
+        if operation not in self.OPERATIONS:
+            # Without this, operation="service" looked up the ACL's service
+            # *string* and "client in 'cifs/fileserver'" became a substring match.
+            raise AuthError(AuthError.FORBIDDEN,
+                            "unknown operation %r" % (operation,))
         acl = self._acls.get(share)
         if acl is None:
             raise AuthError(AuthError.UNKNOWN_PRINCIPAL,
@@ -275,10 +284,10 @@ class FileShareAccess:
         server = ServiceServer(acl["service"], self._kdc, self._clock)
         auth = server.authenticate(service_ticket)  # raises on bad ticket
         allowed = acl.get(operation, [])
-        if auth["client"] not in allowed:
+        if not isinstance(allowed, (list, tuple, set, frozenset)) or auth["client"] not in allowed:
             self.audit.record("share.denied", auth["client"],
                               "%s %s" % (share, operation))
-            raise AuthError(AuthError.BAD_SIGNATURE,
+            raise AuthError(AuthError.FORBIDDEN,
                             "%r is not allowed to %s %r"
                             % (auth["client"], operation, share))
         self.audit.record("share.accessed", auth["client"],

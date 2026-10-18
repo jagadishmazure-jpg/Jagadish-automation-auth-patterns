@@ -64,7 +64,7 @@ class AgentIssuer:
         try:
             body, sig = token.split(".")
         except ValueError:
-            raise AuthError(AuthError.BAD_SIGNATURE, "malformed agent token")
+            raise AuthError(AuthError.BAD_SIGNATURE, "malformed agent token") from None
         if not hmac.compare_digest(self._sign(body), sig):
             raise AuthError(AuthError.BAD_SIGNATURE,
                             "agent token signature invalid")
@@ -88,26 +88,43 @@ class Delegation:
     more power through delegation than the human who delegated.
     """
 
-    def __init__(self, issuer, clock, ttl_seconds=900):
+    def __init__(self, issuer, clock, user_validator, ttl_seconds=900):
+        """``user_validator`` verifies the *user's* token and returns its
+        claims (for example ``FakeTokenEndpoint.validate``). Delegation never
+        trusts a claims dict supplied by the caller."""
         self._issuer = issuer
         self._clock = clock
+        self._validate_user = user_validator
         self._ttl = timedelta(seconds=ttl_seconds)
 
-    def delegate(self, user_claims, agent_id, scopes):
-        user_scopes = set(user_claims.get("scopes", []))
+    def delegate(self, user_token, agent_id, scopes):
+        user_claims = self._validate_user(user_token)   # raises if forged/expired
+        if user_claims.get("kind") in ("agent", "delegation") or "sub" not in user_claims:
+            # An agent or delegation token is not a human delegator: allowing it
+            # would let an agent re-delegate to itself and extend its lifetime.
+            raise AuthError(AuthError.FORBIDDEN,
+                            "only a user token can delegate")
+        delegator = user_claims["sub"]
+        if delegator == agent_id:
+            raise AuthError(AuthError.FORBIDDEN, "cannot delegate to yourself")
+        raw = user_claims.get("scopes", user_claims.get("scope", ""))
+        user_scopes = set(raw.split() if isinstance(raw, str) else raw)
         wanted = set(scopes)
-        if not wanted <= user_scopes:
+        if not wanted or not wanted <= user_scopes:
             raise AuthError(
-                AuthError.BAD_SIGNATURE,
+                AuthError.SCOPE_EXCEEDED,
                 "delegation exceeds delegator scopes: %s not in %s"
                 % (sorted(wanted - user_scopes), sorted(user_scopes)))
         now = self._clock.now()
+        exp = int((now + self._ttl).timestamp())
+        if "exp" in user_claims:
+            exp = min(exp, int(user_claims["exp"]))   # never outlive the user's token
         payload = {
-            "delegator": user_claims.get("sub", user_claims.get("agent_id")),
+            "delegator": delegator,
             "agent_id": agent_id,
             "scopes": sorted(wanted),
             "iat": int(now.timestamp()),
-            "exp": int((now + self._ttl).timestamp()),
+            "exp": exp,
             "jti": secrets.token_hex(8),
             "kind": "delegation",
         }
@@ -124,7 +141,7 @@ class Delegation:
             body, sig = token.split(".")
         except ValueError:
             raise AuthError(AuthError.BAD_SIGNATURE,
-                            "malformed delegation token")
+                            "malformed delegation token") from None
         if not hmac.compare_digest(self._issuer._sign(body), sig):
             raise AuthError(AuthError.BAD_SIGNATURE,
                             "delegation signature invalid")
@@ -150,24 +167,35 @@ class GovernedToolRegistry:
         self._issuer = issuer
         self._clock = clock
         self._tools = {}   # name -> {"scopes": [...], "handler": fn}
-        self._grants = set()  # (agent_id, tool_name)
+        self._grants = {}  # (agent_id, tool_name) -> approver
         self.audit = audit or AuditLog(clock)
 
     def register_tool(self, name, required_scopes, handler):
+        if name in self._tools:
+            # Re-registering would silently attach existing grants to a new
+            # handler with possibly weaker scope requirements.
+            raise AuthError(AuthError.FORBIDDEN, "tool %r already registered" % (name,))
         self._tools[name] = {"scopes": list(required_scopes),
                              "handler": handler}
         self.audit.record("tool.registered", name,
                           "scopes=%s" % ",".join(required_scopes))
 
-    def grant(self, agent_id, tool_name):
+    def grant(self, agent_id, tool_name, approved_by):
+        """Grant a tool to an agent. A named human approver is required and
+        may not be the agent itself (no self-approval)."""
         if tool_name not in self._tools:
             raise AuthError(AuthError.UNKNOWN_PRINCIPAL,
                             "unknown tool %r" % (tool_name,))
-        self._grants.add((agent_id, tool_name))
-        self.audit.record("tool.granted", agent_id, tool_name)
+        approver = (approved_by or "").strip()
+        if not approver or approver.lower() == str(agent_id).strip().lower():
+            raise AuthError(AuthError.FORBIDDEN,
+                            "grant needs a named approver other than the agent")
+        self._grants[(agent_id, tool_name)] = approver
+        self.audit.record("tool.granted", agent_id,
+                          "%s approved_by=%s" % (tool_name, approver))
 
     def revoke_grant(self, agent_id, tool_name):
-        self._grants.discard((agent_id, tool_name))
+        self._grants.pop((agent_id, tool_name), None)
         self.audit.record("tool.grant_revoked", agent_id, tool_name)
 
     def call(self, agent_token, tool_name, *args, **kwargs):
@@ -182,13 +210,13 @@ class GovernedToolRegistry:
             self.audit.record("tool.denied", agent_id,
                               "%s missing_scopes=%s"
                               % (tool_name, ",".join(sorted(missing))))
-            raise AuthError(AuthError.BAD_SIGNATURE,
+            raise AuthError(AuthError.FORBIDDEN,
                             "agent lacks scopes %s for tool %r"
                             % (sorted(missing), tool_name))
         if (agent_id, tool_name) not in self._grants:
             self.audit.record("tool.denied", agent_id,
                               "%s no_grant" % tool_name)
-            raise AuthError(AuthError.BAD_SIGNATURE,
+            raise AuthError(AuthError.FORBIDDEN,
                             "no grant for agent %r on tool %r"
                             % (agent_id, tool_name))
         self.audit.record("tool.called", agent_id, tool_name)

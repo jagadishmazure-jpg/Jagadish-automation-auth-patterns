@@ -29,26 +29,47 @@ def _b64decode(text):
 class FakeTokenEndpoint:
     """Stands in for an OAuth authorization server (no network)."""
 
-    def __init__(self, clock):
+    MAX_TTL_SECONDS = 24 * 3600
+
+    def __init__(self, clock, issuer="https://auth.example.test",
+                 audiences=("api://default",)):
         self._clock = clock
         self._clients = {}
         self._signing_key = secrets.token_bytes(32)
+        self.issuer = issuer
+        self._audiences = set(audiences)
 
-    def register(self, client_id, client_secret):
-        self._clients[client_id] = client_secret
+    def register(self, client_id, client_secret, allowed_scopes=("default",)):
+        """Register a client with the scopes it may ever be issued."""
+        self._clients[client_id] = (client_secret, frozenset(allowed_scopes))
 
-    def token(self, client_id, client_secret, scope="default", ttl_seconds=3600):
-        expected = self._clients.get(client_id)
-        if expected is None:
+    def token(self, client_id, client_secret, scope="default", ttl_seconds=3600,
+              audience="api://default"):
+        entry = self._clients.get(client_id)
+        if entry is None:
             raise AuthError(AuthError.UNKNOWN_PRINCIPAL,
                             "unknown client %r" % (client_id,))
-        if not hmac.compare_digest(expected, client_secret):
+        expected, allowed = entry
+        if not isinstance(client_secret, str) or not hmac.compare_digest(
+                expected.encode("utf-8"), client_secret.encode("utf-8")):
             raise AuthError(AuthError.BAD_SIGNATURE,
                             "bad secret for client %r" % (client_id,))
+        wanted = set(scope.split())
+        if not wanted or not wanted <= allowed:
+            raise AuthError(AuthError.SCOPE_EXCEEDED,
+                            "client %r may not request scope %s"
+                            % (client_id, sorted(wanted - allowed)))
+        if audience not in self._audiences:
+            raise AuthError(AuthError.WRONG_SERVICE,
+                            "unknown audience %r" % (audience,))
+        if not 0 < ttl_seconds <= self.MAX_TTL_SECONDS:
+            raise ValueError("ttl_seconds must be in (0, %d]" % self.MAX_TTL_SECONDS)
         now = self._clock.now()
         payload = {
+            "iss": self.issuer,
+            "aud": audience,
             "sub": client_id,
-            "scope": scope,
+            "scope": " ".join(sorted(wanted)),
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(seconds=ttl_seconds)).timestamp()),
             "jti": secrets.token_hex(8),
@@ -62,12 +83,18 @@ class FakeTokenEndpoint:
             "expires_in": ttl_seconds,
         }
 
-    def validate(self, token, leeway_seconds=60):
-        """Validate a token, tolerating ``leeway_seconds`` of clock skew."""
+    def validate(self, token, leeway_seconds=60, audience="api://default",
+                 required_scopes=()):
+        """Validate signature, issuer, audience, time window and scopes,
+        tolerating ``leeway_seconds`` of clock skew.
+
+        ``audience`` is the API doing the validating: a token minted for a
+        different API is rejected even though the signature is good.
+        """
         try:
             body, sig = token.split(".")
-        except ValueError:
-            raise AuthError(AuthError.BAD_SIGNATURE, "malformed token")
+        except (ValueError, AttributeError):
+            raise AuthError(AuthError.BAD_SIGNATURE, "malformed token") from None
         expected = _b64encode(hmac.new(self._signing_key, body.encode("ascii"),
                                        hashlib.sha256).digest())
         if not hmac.compare_digest(expected, sig):
@@ -75,13 +102,23 @@ class FakeTokenEndpoint:
         try:
             claims = json.loads(_b64decode(body).decode("utf-8"))
         except Exception:
-            raise AuthError(AuthError.BAD_SIGNATURE, "token payload unreadable")
+            raise AuthError(AuthError.BAD_SIGNATURE, "token payload unreadable") from None
+        if claims.get("iss") != self.issuer:
+            raise AuthError(AuthError.WRONG_SERVICE, "token issuer is not trusted")
+        if claims.get("aud") != audience:
+            raise AuthError(AuthError.WRONG_SERVICE,
+                            "token is for audience %r, not %r"
+                            % (claims.get("aud"), audience))
         now_ts = self._clock.now().timestamp()
         if now_ts < claims["iat"] - leeway_seconds:
             raise AuthError(AuthError.CLOCK_SKEW,
                             "token used before it was issued: clocks disagree")
         if now_ts > claims["exp"] + leeway_seconds:
             raise AuthError(AuthError.EXPIRED_CREDENTIAL, "token has expired")
+        missing = set(required_scopes) - set(claims.get("scope", "").split())
+        if missing:
+            raise AuthError(AuthError.SCOPE_EXCEEDED,
+                            "token lacks scopes %s" % sorted(missing))
         return claims
 
 
@@ -96,17 +133,20 @@ class OAuthClient:
         self._clock = clock
         self._margin = timedelta(seconds=refresh_margin_seconds)
         self.audit = audit or AuditLog(clock)
-        self._token = None
-        self._expires_at = None
+        self._cache = {}   # (scope, audience) -> (token, expires_at)
 
-    def get_token(self, scope="default"):
+    def get_token(self, scope="default", audience="api://default"):
+        """Cached per (scope, audience): a token cached for one scope is never
+        handed out for a request asking for a different one."""
+        key = (" ".join(sorted(set(scope.split()))), audience)
         now = self._clock.now()
-        if self._token is not None and now < self._expires_at - self._margin:
+        cached = self._cache.get(key)
+        if cached is not None and now < cached[1] - self._margin:
             self.audit.record("oauth.cache_hit", self._client_id, scope)
-            return self._token
+            return cached[0]
         resp = self._endpoint.token(self._client_id, self._client_secret,
-                                    scope=scope)
-        self._token = resp["access_token"]
-        self._expires_at = now + timedelta(seconds=resp["expires_in"])
+                                    scope=scope, audience=audience)
+        self._cache[key] = (resp["access_token"],
+                            now + timedelta(seconds=resp["expires_in"]))
         self.audit.record("oauth.token_acquired", self._client_id, scope)
-        return self._token
+        return resp["access_token"]

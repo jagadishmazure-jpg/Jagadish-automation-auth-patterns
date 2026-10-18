@@ -18,6 +18,8 @@ class AuthError(Exception):
     CERT_EXPIRED = "cert_expired"
     TICKET_EXPIRED = "ticket_expired"
     WRONG_SERVICE = "wrong_service"
+    SCOPE_EXCEEDED = "scope_exceeded"   # asked for more than was granted
+    FORBIDDEN = "forbidden"             # authenticated, but not allowed
 
     def __init__(self, code, message):
         super().__init__(message)

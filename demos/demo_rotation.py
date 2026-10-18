@@ -1,5 +1,6 @@
 """Demo: zero-downtime credential rotation with overlap window."""
 import sys
+
 sys.path.insert(0, ".")
 
 from authpatterns.clock import FakeClock

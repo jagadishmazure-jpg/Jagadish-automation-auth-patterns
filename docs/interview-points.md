@@ -6,7 +6,8 @@ depth.
 ## Vaulted service accounts
 "Agents fetch credentials at run time from a central vault instead of
 storing them. The two properties that matter: the audit log sees
-fingerprints, never plaintext -- proven by a test that scans the log --
+keyed HMAC fingerprints, never plaintext (an unkeyed hash of a weak
+password can be brute-forced offline) -- proven by a test that scans the log --
 and reads fail closed. A vault you can't reach hands out nothing."
 
 ## API keys
@@ -49,6 +50,11 @@ you get lockouts and give attackers signal."
 a subset rule so an agent never exceeds its delegator, and a governed tool
 registry where every call checks token, scopes, and an explicit grant.
 Discovery is separated from execution."
+
+The review story: "The first version accepted a plain claims dict as the
+delegating user, and let an agent approve its own grant. Now delegation
+only accepts a signed user token, can't outlive it, and grants need a named
+human approver. Each of the nine bypasses has a regression test."
 
 ## Enterprise idioms
 "Each system has an idiom: SAP is user+client, Oracle is wallet,

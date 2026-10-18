@@ -38,7 +38,21 @@ If agents call tools, put a registry in front (`agentic.py`):
 short-lived agent tokens, scope checks, explicit grants, full audit. The
 grant -- not the model -- is the authorization decision.
 
-## 6. Make the failure table operational
+## 6. Wire the fail-closed constructors
+
+The APIs make the secure choice mandatory, and the production version should
+keep it that way:
+
+| Call | Required input | Production counterpart |
+|---|---|---|
+| `FakeTokenEndpoint.register(client, secret, allowed_scopes=...)` | the scopes this client may request | IdP client scope policy |
+| `FakeTokenEndpoint(clock, issuer=..., audiences=...)` and `validate(token, audience=..., required_scopes=...)` | the issuer and the audience the resource server expects | JWT `iss`/`aud` validation in every API |
+| `Delegation(issuer, clock, user_validator)` | a function that verifies the user's token | IdP token validation / token exchange |
+| `GovernedToolRegistry.grant(agent, tool, approved_by=...)` | a named approver who is not the agent | change-approval workflow |
+| `MTLSServer(clock, trusted_cas, expected_cn=...)` | the client identity (or set) to accept | SAN/SPIFFE ID pinning at the proxy |
+| `AUTHPATTERNS_FINGERPRINT_KEY` env var | the audit fingerprint key | key from the vault, rotated on schedule |
+
+## 7. Make the failure table operational
 
 Turn `knowledge/03-failure-modes.md` into runbook pages: each code gets an
 owner, an alert, and a first action. `vault_unreachable` pages infra;

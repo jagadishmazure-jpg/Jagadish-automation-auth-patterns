@@ -55,7 +55,14 @@ class CertificateAuthority:
 class MTLSServer:
     """Server side of the handshake: validates the client's certificate."""
 
-    def __init__(self, clock, trusted_cas, expected_cn=None, audit=None):
+    def __init__(self, clock, trusted_cas, expected_cn, audit=None):
+        """``expected_cn`` (a name or a collection of names) is required:
+        without it any certificate from a trusted CA would be accepted as
+        any service."""
+        if not expected_cn:
+            raise ValueError("expected_cn is required (fail-closed identity pinning)")
+        if isinstance(expected_cn, str):
+            expected_cn = {expected_cn}
         self._clock = clock
         self._cas = list(trusted_cas)
         self._expected_cn = expected_cn
@@ -73,7 +80,7 @@ class MTLSServer:
                               "cert_expired")
             raise AuthError(AuthError.CERT_EXPIRED,
                             "certificate is outside its validity window")
-        if self._expected_cn and cert.common_name != self._expected_cn:
+        if cert.common_name not in self._expected_cn:
             self.audit.record("mtls.rejected", cert.common_name,
                               "cn_mismatch")
             raise AuthError(AuthError.UNKNOWN_PRINCIPAL,

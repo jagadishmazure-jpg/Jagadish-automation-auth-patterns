@@ -7,11 +7,21 @@ pass :func:`fingerprint` values, never plaintext.
 import hashlib
 import hmac
 import json
+import os
+import secrets
+
+# Keyed fingerprints: a plain SHA-256 of a low-entropy password can be
+# brute-forced offline from the log, an HMAC under a key the log never holds
+# cannot. Set AUTHPATTERNS_FINGERPRINT_KEY to keep fingerprints comparable
+# across processes; otherwise a random per-process key is used.
+_FP_KEY = (os.environ.get("AUTHPATTERNS_FINGERPRINT_KEY", "").encode("utf-8")
+           or secrets.token_bytes(32))
 
 
 def fingerprint(secret):
     """Short, non-reversible identifier for a secret (safe for logs)."""
-    return "sha256:" + hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+    digest = hmac.new(_FP_KEY, secret.encode("utf-8"), hashlib.sha256)
+    return "hmac-sha256:" + digest.hexdigest()[:16]
 
 
 class AuditLog:

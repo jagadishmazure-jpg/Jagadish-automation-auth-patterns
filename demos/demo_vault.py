@@ -1,5 +1,6 @@
 """Demo: vaulted service account with rotation (fail-closed)."""
 import sys
+
 sys.path.insert(0, ".")
 
 from authpatterns.audit import AuditLog

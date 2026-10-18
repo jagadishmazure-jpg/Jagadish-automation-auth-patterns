@@ -1,10 +1,11 @@
 """Tests: simulated mTLS handshake."""
+from datetime import timedelta
+
 import pytest
 
 from authpatterns.clock import FakeClock
 from authpatterns.errors import AuthError
 from authpatterns.mtls import Certificate, CertificateAuthority, MTLSServer
-from datetime import timedelta
 
 
 def make_cert(clock, cn="svc-a", days=365):
@@ -15,7 +16,7 @@ def make_cert(clock, cn="svc-a", days=365):
 def test_handshake_succeeds_with_trusted_cert():
     clock = FakeClock()
     ca = CertificateAuthority()
-    server = MTLSServer(clock, [ca])
+    server = MTLSServer(clock, [ca], expected_cn="svc-a")
     session = server.handshake(ca.sign(make_cert(clock)))
     assert session["peer"] == "svc-a"
 
@@ -24,7 +25,7 @@ def test_untrusted_issuer_rejected():
     clock = FakeClock()
     ca = CertificateAuthority("Real CA")
     rogue = CertificateAuthority("Rogue CA")
-    server = MTLSServer(clock, [ca])
+    server = MTLSServer(clock, [ca], expected_cn="svc-a")
     with pytest.raises(AuthError) as exc:
         server.handshake(rogue.sign(make_cert(clock)))
     assert exc.value.code == AuthError.BAD_SIGNATURE
@@ -33,7 +34,7 @@ def test_untrusted_issuer_rejected():
 def test_expired_cert_rejected():
     clock = FakeClock()
     ca = CertificateAuthority()
-    server = MTLSServer(clock, [ca])
+    server = MTLSServer(clock, [ca], expected_cn="svc-a")
     cert = ca.sign(make_cert(clock, days=1))
     clock.advance(days=2)
     with pytest.raises(AuthError) as exc:
@@ -44,7 +45,7 @@ def test_expired_cert_rejected():
 def test_not_yet_valid_cert_rejected():
     clock = FakeClock()
     ca = CertificateAuthority()
-    server = MTLSServer(clock, [ca])
+    server = MTLSServer(clock, [ca], expected_cn="svc-a")
     now = clock.now()
     cert = Certificate("svc-a", now + timedelta(days=1),
                        now + timedelta(days=30))
@@ -56,7 +57,7 @@ def test_not_yet_valid_cert_rejected():
 def test_tampered_cert_rejected():
     clock = FakeClock()
     ca = CertificateAuthority()
-    server = MTLSServer(clock, [ca])
+    server = MTLSServer(clock, [ca], expected_cn="svc-a")
     cert = ca.sign(make_cert(clock))
     cert.common_name = "svc-evil"  # tamper after signing
     with pytest.raises(AuthError) as exc:
@@ -76,6 +77,6 @@ def test_unexpected_identity_rejected():
 def test_audit_chain_valid_after_handshakes():
     clock = FakeClock()
     ca = CertificateAuthority()
-    server = MTLSServer(clock, [ca])
+    server = MTLSServer(clock, [ca], expected_cn="svc-a")
     server.handshake(ca.sign(make_cert(clock)))
     assert server.audit.verify()

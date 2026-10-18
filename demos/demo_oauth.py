@@ -1,5 +1,6 @@
 """Demo: OAuth client-credentials with caching and proactive refresh."""
 import sys
+
 sys.path.insert(0, ".")
 
 from authpatterns.clock import FakeClock

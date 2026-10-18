@@ -52,7 +52,7 @@ class KDC:
         try:
             body, sig = token.split(".")
         except ValueError:
-            raise AuthError(AuthError.BAD_SIGNATURE, "malformed ticket")
+            raise AuthError(AuthError.BAD_SIGNATURE, "malformed ticket") from None
         expected = _b64encode(hmac.new(self._kdc_key, body.encode("ascii"),
                                        hashlib.sha256).digest())
         if not hmac.compare_digest(expected, sig):

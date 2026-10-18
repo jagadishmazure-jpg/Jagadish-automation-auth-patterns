@@ -1,7 +1,6 @@
 """Tests: error taxonomy and retry policy."""
 import pytest
 
-from authpatterns.clock import FakeClock
 from authpatterns.errors import AuthError, RetryPolicy, is_retryable
 
 
