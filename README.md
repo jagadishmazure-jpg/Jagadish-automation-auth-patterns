@@ -115,7 +115,7 @@ Vaulted credential with rotation (`demos/demo_vault.py`):
 <!-- run: python demos/demo_vault.py -->
 ```text
 stored, retrieved: True
-after rotation: rotated-secret-002
+after rotation, new secret served: True
 vault offline -> code=vault_unreachable retryable=True
 audit chain valid: True
 audit holds fingerprints only: True

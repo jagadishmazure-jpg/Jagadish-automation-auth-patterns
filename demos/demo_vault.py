@@ -16,7 +16,8 @@ print("stored, retrieved:", vault.retrieve("erp/service-password")
       == "initial-secret-001")
 
 vault.rotate("erp/service-password", "rotated-secret-002")
-print("after rotation:", vault.retrieve("erp/service-password"))
+print("after rotation, new secret served:", vault.retrieve("erp/service-password")
+      == "rotated-secret-002")
 
 # fail-closed: vault down -> no credentials, and the failure is retryable
 vault.go_offline()

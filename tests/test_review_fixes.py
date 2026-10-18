@@ -143,8 +143,9 @@ def test_tool_grant_needs_a_named_approver_who_is_not_the_agent():
         with pytest.raises(AuthError) as exc:
             reg.grant("agent-x", "delete_all", approved_by=approver)
         assert exc.value.code == AuthError.FORBIDDEN
+    missing_approver = ("agent-x", "delete_all")
     with pytest.raises(TypeError):
-        reg.grant("agent-x", "delete_all")       # approver is mandatory
+        reg.grant(*missing_approver)             # approver is mandatory
     reg.grant("agent-x", "delete_all", approved_by="r.osei")
     assert reg.call(issuer.issue("agent-x", ["admin"]), "delete_all") == "deleted"
     assert "approved_by=r.osei" in reg.audit.entries()[-2]["detail"]
@@ -194,8 +195,9 @@ def test_api_key_status_is_not_revealed_without_the_secret():
 def test_mtls_server_requires_identity_pinning():
     clock = FakeClock()
     ca = CertificateAuthority()
+    no_pin = (clock, [ca])
     with pytest.raises((TypeError, ValueError)):
-        MTLSServer(clock, [ca])
+        MTLSServer(*no_pin)                      # expected_cn is mandatory
     with pytest.raises(ValueError):
         MTLSServer(clock, [ca], expected_cn="")
     server = MTLSServer(clock, [ca], expected_cn={"svc-a", "svc-b"})

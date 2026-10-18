@@ -55,7 +55,8 @@ store.revoke(key.key_id)
 attempt("rotate a revoked API key", lambda: store.rotate(key.key_id))
 
 ca = CertificateAuthority()
-attempt("mTLS server without a pinned CN", lambda: MTLSServer(clock, [ca]))
+no_pin = (clock, [ca])  # deliberately omits expected_cn
+attempt("mTLS server without a pinned CN", lambda: MTLSServer(*no_pin))
 server = MTLSServer(clock, [ca], expected_cn="job-agent-01")
 rogue = ca.sign(Certificate("rogue-host", clock.now() - timedelta(days=1), clock.now() + timedelta(days=1)))
 attempt("same-CA cert with another CN", lambda: server.handshake(rogue))
